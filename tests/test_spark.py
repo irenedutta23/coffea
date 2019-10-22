@@ -36,12 +36,13 @@ def test_spark_executor():
         .appName('spark-executor-test-%s' % guid()) \
         .master('local[*]') \
         .config('spark.sql.execution.arrow.enabled','true') \
+        .config('spark.executor.x509proxyname','x509_u12409') \
         .config('spark.sql.execution.arrow.maxRecordsPerBatch', 200000)
 
     spark = _spark_initialize(config=spark_config,log_level='ERROR',spark_progress=False)
 
-    filelist = {'ZJets': ['file:'+osp.join(os.getcwd(),'tests/samples/nano_dy.root')],
-                'Data'  : ['file:'+osp.join(os.getcwd(),'tests/samples/nano_dimuon.root')]
+    filelist = {'ZJets': {'files': ['file:'+osp.join(os.getcwd(),'tests/samples/nano_dy.root')], 'treename': 'Events' },
+                'Data'  : {'files': ['file:'+osp.join(os.getcwd(),'tests/samples/nano_dimuon.root')], 'treename': 'Events'}
                 }
 
     from coffea.processor.test_items import NanoTestProcessor
@@ -66,7 +67,7 @@ def test_spark_hist_adders():
     pyspark = pytest.importorskip("pyspark", minversion="2.4.1")
     
     import pandas as pd
-    import _pickle as pkl
+    import pickle as pkl
     import lz4.frame as lz4f
 
     from coffea.util import numpy as np

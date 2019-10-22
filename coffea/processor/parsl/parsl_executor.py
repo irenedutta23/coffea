@@ -12,11 +12,12 @@ import time
 
 from parsl.app.app import python_app
 from .timeout import timeout
-from ..executor import futures_handler
+from ..executor import _futures_handler
 
 lz4_clevel = 1
 
 
+@timeout
 @python_app
 def coffea_pyapp(dataset, fn, treename, chunksize, index, procstr, timeout=None, flatten=True):
     import uproot
@@ -25,7 +26,6 @@ def coffea_pyapp(dataset, fn, treename, chunksize, index, procstr, timeout=None,
     import lz4.frame as lz4f
     from coffea import hist, processor
     from coffea.processor.accumulator import value_accumulator
-    from concurrent.futures import ThreadPoolExecutor, TimeoutError
 
     uproot.XRootDSource.defaults["parallel"] = False
 
@@ -43,19 +43,8 @@ def coffea_pyapp(dataset, fn, treename, chunksize, index, procstr, timeout=None,
 
     processor_instance = cpkl.loads(lz4f.decompress(procstr))
 
-    afile = None
-    for i in range(5):
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(uproot.open, fn)
-            try:
-                afile = future.result(timeout=timeout)
-            except TimeoutError:
-                afile = None
-            else:
-                break
+    afile = uproot.open(fn)
 
-    if afile is None:
-        raise Exception('unable to open: %s' % fn)
     tree = None
     if isinstance(treename, str):
         tree = afile[treename]
@@ -89,7 +78,7 @@ class ParslExecutor(object):
     def counts(self):
         return self._counts
 
-    def __call__(self, dfk, items, processor_instance, output, status=True, unit='items', desc='Processing', timeout=None, flatten=True):
+    def __call__(self, items, processor_instance, output, status=True, unit='items', desc='Processing', timeout=None, flatten=True):
         procstr = lz4f.compress(cpkl.dumps(processor_instance))
 
         futures = set()
@@ -103,7 +92,7 @@ class ParslExecutor(object):
             total[1][dataset] += nevents
             total[0].add(pkl.loads(lz4f.decompress(blob)))
 
-        futures_handler(futures, (output, self._counts), status, unit, desc, futures_accumulator=pex_accumulator)
+        _futures_handler(futures, (output, self._counts), status, unit, desc, add_fn=pex_accumulator)
 
 
 parsl_executor = ParslExecutor()

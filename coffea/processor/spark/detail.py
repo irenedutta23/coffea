@@ -4,9 +4,13 @@ from tqdm import tqdm
 import pyspark.sql
 import pyspark.sql.functions as fn
 from pyarrow.compat import guid
-from collections.abc import Sequence
 
-from ..executor import futures_handler
+try:
+    from collections.abc import Sequence
+except ImportError:
+    from collections import Sequence
+
+from ..executor import _futures_handler
 
 # this is a reasonable local spark configuration
 _default_config = pyspark.sql.SparkSession.builder \
@@ -28,7 +32,7 @@ def _spark_initialize(config=_default_config, **kwargs):
         cfg_actual = cfg_actual.config('spark.ui.showConsoleProgress', 'false')
 
     # always load laurelin even if we may not use it
-    kwargs.setdefault('laurelin_version', '0.1.0')
+    kwargs.setdefault('laurelin_version', '0.3.0')
     laurelin = kwargs['laurelin_version']
     cfg_actual = cfg_actual.config('spark.jars.packages',
                                    'edu.vanderbilt.accre:laurelin:%s' % laurelin)
@@ -44,16 +48,21 @@ def _spark_initialize(config=_default_config, **kwargs):
     return session
 
 
-def _read_df(spark, dataset, files_or_dirs, ana_cols, partitionsize, file_type, treeName='Events'):
-    if not isinstance(files_or_dirs, Sequence):
+def _read_df(spark, dataset, files_or_dirs, ana_cols, partitionsize, file_type, treeName):
+    flist = files_or_dirs
+    tname = treeName
+    if isinstance(files_or_dirs, dict):
+        tname = files_or_dirs['treename']
+        flist = files_or_dirs['files']
+    if not isinstance(flist, Sequence):
         raise ValueError('spark dataset file list must be a Sequence (like list())')
     df = None
     if file_type == 'parquet':
-        df = spark.read.parquet(*files_or_dirs)
+        df = spark.read.parquet(flist)
     else:
         df = spark.read.format(file_type) \
-                       .option('tree', treeName) \
-                       .load(*files_or_dirs)
+                       .option('tree', tname) \
+                       .load(flist)
     count = df.count()
 
     df_cols = set(df.columns)
@@ -64,13 +73,16 @@ def _read_df(spark, dataset, files_or_dirs, ana_cols, partitionsize, file_type, 
         df = df.withColumn(missing, fn.lit(0.0))
     df = df.withColumn('dataset', fn.lit(dataset))
     npartitions = (count // partitionsize) + 1
-    if df.rdd.getNumPartitions() > npartitions:
+    actual_partitions = df.rdd.getNumPartitions()
+    avg_counts = count / actual_partitions
+    if actual_partitions > 1.50 * npartitions or avg_counts > partitionsize:
         df = df.repartition(npartitions)
 
     return df, dataset, count
 
 
-def _spark_make_dfs(spark, fileset, partitionsize, columns, thread_workers, file_type, status=True):
+def _spark_make_dfs(spark, fileset, partitionsize, columns, thread_workers, file_type,
+                    treeName, status=True):
     dfs = {}
     ana_cols = set(columns)
 
@@ -80,9 +92,10 @@ def _spark_make_dfs(spark, fileset, partitionsize, columns, thread_workers, file
 
     with ThreadPoolExecutor(max_workers=thread_workers) as executor:
         futures = set(executor.submit(_read_df, spark, ds, files,
-                                      ana_cols, partitionsize, file_type) for ds, files in fileset.items())
+                                      ana_cols, partitionsize, file_type,
+                                      treeName) for ds, files in fileset.items())
 
-        futures_handler(futures, dfs, status, 'datasets', 'loading', futures_accumulator=dfs_accumulator)
+        _futures_handler(futures, dfs, status, 'datasets', 'loading', add_fn=dfs_accumulator)
 
     return dfs
 
